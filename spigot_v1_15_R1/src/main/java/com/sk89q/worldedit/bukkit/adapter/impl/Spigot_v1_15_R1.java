@@ -612,6 +612,55 @@ public final class Spigot_v1_15_R1 implements BukkitImplAdapter {
         return true;
     }
 
+    @Override
+    public boolean regenerateBiome(org.bukkit.World bukkitWorld, Region region, EditSession editSession) {
+        WorldServer originalWorld = ((CraftWorld) bukkitWorld).getHandle();
+
+        File saveFolder = Files.createTempDir();
+        // register this just in case something goes wrong
+        // normally it should be deleted at the end of this method
+        saveFolder.deleteOnExit();
+        try {
+            Environment env = bukkitWorld.getEnvironment();
+            ChunkGenerator gen = bukkitWorld.getGenerator();
+            MinecraftServer server = originalWorld.getServer().getServer();
+
+            WorldData newWorldData = new WorldData(originalWorld.worldData.a((NBTTagCompound) null),
+                    server.dataConverterManager, getDataVersion(), null);
+            newWorldData.setName("worldeditregentempworld");
+            WorldNBTStorage saveHandler = new WorldNBTStorage(saveFolder,
+                    originalWorld.getDataManager().getDirectory().getName(), server, server.dataConverterManager);
+
+            try (WorldServer freshWorld = new WorldServer(server, server.executorService, saveHandler,
+                    newWorldData, originalWorld.worldProvider.getDimensionManager(),
+                    originalWorld.getMethodProfiler(), new NoOpWorldLoadListener(), env, gen)) {
+                freshWorld.savingDisabled = true;
+
+                // Pre-gen all the chunks
+                // We need to also pull one more chunk in every direction
+                CuboidRegion expandedPreGen = new CuboidRegion(region.getMinimumPoint().subtract(16, 0, 16),
+                                                                region.getMaximumPoint().add(16, 0, 16));
+                for (BlockVector2 chunk : expandedPreGen.getChunks()) {
+                    freshWorld.getChunkAt(chunk.getBlockX(), chunk.getBlockZ());
+                }
+
+                CraftWorld craftWorld = new CraftWorld(freshWorld, gen, env);
+                synchronized (craftWorld) {
+                    BukkitWorld from = new BukkitWorld(craftWorld);
+                    for (BlockVector3 vec : region) {
+                        editSession.setBiome(BlockVector2.at(vec.getX(), vec.getZ()), from.getBiome(BlockVector2.at(vec.getX(), vec.getZ())));
+                    }
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        } finally {
+            saveFolder.delete();
+        }
+        return true;
+    }
+
+
     // ------------------------------------------------------------------------
     // Code that is less likely to break
     // ------------------------------------------------------------------------
